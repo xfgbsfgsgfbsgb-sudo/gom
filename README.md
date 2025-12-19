@@ -1,1 +1,221 @@
-# gom
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Roblox 3D Multiplayer P2P</title>
+    <style>
+        body { margin: 0; overflow: hidden; font-family: 'Arial', sans-serif; background: #87CEEB; }
+        #ui { position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%); 
+              background: rgba(255,255,255,0.95); padding: 30px; border-radius: 20px; text-align: center; z-index: 10; box-shadow: 0 0 20px rgba(0,0,0,0.3); }
+        .btn { padding: 12px 25px; cursor: pointer; background: #ff5722; color: white; border: none; border-radius: 8px; font-weight: bold; margin: 10px; }
+        #status { position: absolute; top: 15px; left: 15px; color: white; background: rgba(0,0,0,0.6); padding: 8px 15px; border-radius: 20px; font-size: 14px; }
+        input { padding: 10px; border-radius: 5px; border: 2px solid #ddd; width: 200px; }
+    </style>
+</head>
+<body>
+
+<div id="status">Загрузка сети...</div>
+
+<div id="ui">
+    <h1 style="color: #333;">ROBLOX CLONE 3D</h1>
+    <div id="setup">
+        <p>Ваш секретный ID: <br><strong id="my-id" style="color: #2196F3; font-size: 1.2em;">...</strong></p>
+        <button class="btn" onclick="copyID()">Копировать ID</button>
+        <hr>
+        <input type="text" id="join-id" placeholder="Вставь ID друга">
+        <br>
+        <button class="btn" style="background: #4CAF50;" onclick="joinGame()">ВОЙТИ К ДРУГУ</button>
+    </div>
+</div>
+
+<script src="https://unpkg.com/peerjs@1.5.2/dist/peerjs.min.js"></script>
+<script type="importmap">
+    { "imports": { "three": "https://unpkg.com/three@0.160.0/build/three.module.js" } }
+</script>
+
+<script type="module">
+    import * as THREE from 'three';
+
+    let scene, camera, renderer, player, peer, conn;
+    let platforms = [];
+    let otherPlayers = {};
+    const keys = {};
+
+    // --- СЕТЬ (БЕСПЛАТНО ЧЕРЕЗ PEERJS) ---
+    peer = new Peer();
+    peer.on('open', id => {
+        document.getElementById('my-id').innerText = id;
+        document.getElementById('status').innerText = "🟢 В сети. Ждем друзей...";
+    });
+
+    window.copyID = () => {
+        navigator.clipboard.writeText(document.getElementById('my-id').innerText);
+        alert("ID скопирован! Отправь его другу.");
+    };
+
+    peer.on('connection', c => {
+        conn = c;
+        setupConn();
+        hideUI();
+    });
+
+    window.joinGame = () => {
+        const id = document.getElementById('join-id').value;
+        if(!id) return alert("Введите ID!");
+        conn = peer.connect(id);
+        setupConn();
+        hideUI();
+    };
+
+    function setupConn() {
+        conn.on('open', () => {
+            document.getElementById('status').innerText = "🔵 Соединение установлено!";
+            setInterval(() => {
+                if(player) conn.send({ x: player.position.x, y: player.position.y, z: player.position.z, ry: player.rotation.y });
+            }, 50);
+        });
+        conn.on('data', data => updateRemotePlayer(data));
+    }
+
+    function hideUI() { document.getElementById('ui').style.display = 'none'; initGame(); }
+
+    // --- ИГРА ---
+    function initGame() {
+        scene = new THREE.Scene();
+        scene.background = new THREE.Color(0x40a8f5); // Красивое небо
+        scene.fog = new THREE.Fog(0x40a8f5, 10, 100);
+
+        camera = new THREE.PerspectiveCamera(75, window.innerWidth/window.innerHeight, 0.1, 1000);
+        renderer = new THREE.WebGLRenderer({ antialias: true });
+        renderer.setSize(window.innerWidth, window.innerHeight);
+        renderer.shadowMap.enabled = true;
+        document.body.appendChild(renderer.domElement);
+
+        const light = new THREE.DirectionalLight(0xffffff, 1.2);
+        light.position.set(20, 40, 20);
+        light.castShadow = true;
+        scene.add(light, new THREE.AmbientLight(0xffffff, 0.6));
+
+        // ПОЛ (ТРАВА)
+        addBlock(0, -1, 0, 50, 1, 50, 0x4caf50); 
+
+        // ОГРОМНЫЙ ЦВЕТНОЙ ПАРКУР
+        const colors = [0xff0000, 0xff9800, 0xffeb3b, 0x4caf50, 0x2196f3, 0x9c27b0];
+        for(let i=1; i<30; i++) {
+            addBlock(
+                Math.sin(i * 0.8) * 8, 
+                i * 1.5, 
+                -i * 6, 
+                4, 0.8, 4, 
+                colors[i % colors.length]
+            );
+        }
+
+        player = createCharacter(0xffffff);
+        player.position.y = 5; // Начинаем чуть выше
+        scene.add(player);
+
+        window.onkeydown = (e) => keys[e.code] = true;
+        window.onkeyup = (e) => keys[e.code] = false;
+
+        animate();
+    }
+
+    function addBlock(x, y, z, w, h, d, color) {
+        const mesh = new THREE.Mesh(
+            new THREE.BoxGeometry(w, h, d),
+            new THREE.MeshStandardMaterial({ color })
+        );
+        mesh.position.set(x, y, z);
+        mesh.receiveShadow = true;
+        mesh.castShadow = true;
+        scene.add(mesh);
+        
+        // Создаем хитбокс для коллизии
+        platforms.push(new THREE.Box3().setFromObject(mesh));
+    }
+
+    function createCharacter(color) {
+        const group = new THREE.Group();
+        const mat = new THREE.MeshStandardMaterial({color});
+        const skin = new THREE.MeshStandardMaterial({color: 0xffdbac});
+
+        const body = new THREE.Mesh(new THREE.BoxGeometry(0.8, 1.2, 0.5), mat);
+        body.position.y = 1;
+        
+        const head = new THREE.Mesh(new THREE.BoxGeometry(0.5, 0.5, 0.5), skin);
+        head.position.y = 1.8;
+
+        const arm = new THREE.BoxGeometry(0.3, 1, 0.3);
+        const lArm = new THREE.Mesh(arm, mat); lArm.position.set(-0.6, 1, 0);
+        const rArm = new THREE.Mesh(arm, mat); rArm.position.set(0.6, 1, 0);
+
+        const leg = new THREE.BoxGeometry(0.35, 1, 0.35);
+        const lLeg = new THREE.Mesh(leg, new THREE.MeshStandardMaterial({color: 0x222222}));
+        lLeg.position.set(-0.25, 0.3, 0);
+        const rLeg = new THREE.Mesh(leg, new THREE.MeshStandardMaterial({color: 0x222222}));
+        rLeg.position.set(0.25, 0.3, 0);
+
+        group.add(body, head, lArm, rArm, lLeg, rLeg);
+        return group;
+    }
+
+    function updateRemotePlayer(data) {
+        if (!otherPlayers["friend"]) {
+            otherPlayers["friend"] = createCharacter(0x00e5ff);
+            scene.add(otherPlayers["friend"]);
+        }
+        otherPlayers["friend"].position.lerp(new THREE.Vector3(data.x, data.y, data.z), 0.3);
+        otherPlayers["friend"].rotation.y = data.ry;
+    }
+
+    let vy = 0;
+    function animate() {
+        requestAnimationFrame(animate);
+        if(!player) return;
+
+        // Поворот и движение
+        if(keys['KeyA']) player.rotation.y += 0.05;
+        if(keys['KeyD']) player.rotation.y -= 0.05;
+        
+        const dir = new THREE.Vector3(0, 0, -1).applyQuaternion(player.quaternion);
+        const oldPos = player.position.clone();
+
+        if(keys['KeyW']) player.position.addScaledVector(dir, 0.15);
+        if(keys['KeyS']) player.position.addScaledVector(dir, -0.15);
+
+        // Гравитация и Коллизия
+        vy -= 0.01; 
+        player.position.y += vy;
+
+        let onGround = false;
+        const playerBox = new THREE.Box3().setFromObject(player);
+
+        for(let platform of platforms) {
+            if(playerBox.intersectsBox(platform)) {
+                // Если мы падаем и коснулись блока сверху
+                if(vy < 0 && player.position.y > platform.min.y) {
+                    player.position.y = platform.max.y;
+                    vy = 0;
+                    onGround = true;
+                }
+            }
+        }
+
+        if(keys['Space'] && onGround) vy = 0.25;
+
+        // Падение в бездну
+        if(player.position.y < -10) {
+            player.position.set(0, 5, 0);
+            vy = 0;
+        }
+
+        // Камера (Roblox стиль)
+        const camPos = new THREE.Vector3(0, 5, 10).applyQuaternion(player.quaternion).add(player.position);
+        camera.position.lerp(camPos, 0.1);
+        camera.lookAt(player.position.x, player.position.y + 1, player.position.z);
+
+        renderer.render(scene, camera);
+    }
+</script>
+</body>
+</html>
